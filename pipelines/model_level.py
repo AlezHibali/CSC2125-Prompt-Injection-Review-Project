@@ -1,26 +1,45 @@
-from transformers import pipeline
 import time
 import torch
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 class ModelLevelPipeline:
     def __init__(self):
-        self.device = 0 if torch.cuda.is_available() else -1
-        self.guard = pipeline("text-generation", model="meta-llama/Llama-Guard-3-8B", token=True, device=self.device)
-        self.llm = pipeline("text-generation", model="meta-llama/Meta-Llama-3-8B-Instruct", token=True, device=self.device)
+        model_name = "protectai/deberta-v3-base-prompt-injection"
+
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_name)
+
+        self.model.eval()
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.to(self.device)
 
     def run(self, prompt):
         start = time.time()
 
-        # guard_result = self.guard(prompt)[0]
+        inputs = self.tokenizer(
+            prompt,
+            return_tensors="pt",
+            truncation=True,
+            padding=True,
+            max_length=512
+        ).to(self.device)
 
-        # if "unsafe" in guard_result['label'].lower():
-        #     return "BLOCKED", time.time() - start
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+            logits = outputs.logits
 
-        # output = self.llm(prompt, max_new_tokens=50)[0]['generated_text']
-
-        output = self.guard(prompt, max_new_tokens=50)[0]['generated_text']
+        probs = torch.softmax(logits, dim=-1)
+        pred = torch.argmax(probs, dim=-1).item()
 
         latency = time.time() - start
 
-        return output, latency
+        # Label mapping (IMPORTANT)
+        # 0 = safe, 1 = injection (unsafe)
+        if pred == 1:
+            result = "unsafe"
+        else:
+            result = "safe"
+
+        return result, latency
     
